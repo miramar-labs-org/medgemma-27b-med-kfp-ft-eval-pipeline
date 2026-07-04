@@ -166,3 +166,39 @@ python3 -c "from kfp import compiler; from pipeline import pipeline; \
 ```
 
 Then commit and deploy.
+
+---
+
+## Implementation Notes — run-001 (2026-07-04)
+
+### Dataset choice: openlifescienceai/medmcqa
+
+Same dataset and formatter as `qwen25-7b-medmcqa-kfp-ft-eval-pipeline`. The medmcqa cop-index
+schema (opa/opb/opc/opd + `cop` integer 0–3) maps cleanly to A/B/C/D letters. No domain
+filtering applied — medmcqa is already 100% medical.
+
+### LoRA config and batch size
+
+- `r=16, α=32` with 7 target modules (full attention + MLP): same config that worked for Qwen2.5-7B
+- `batch_size=1, grad_accumulation_steps=8` (effective batch=8): necessary for 27B BF16 (~54 GB weights) within the 100 GiB budget
+- `overhead_hours=1.5`: 27B model download + load is slower than 7B; extra 30 min vs the 1.0h used for Qwen
+
+### System message
+
+`"You are a helpful medical assistant."` — taken verbatim from the MedGemma model card examples.
+
+### run-001 outcome and analysis
+
+MedGemma-27B-IT baseline on MedMCQA: **0.755** (vs Qwen2.5-7B-Instruct baseline: 0.640).
+The 15-point gap reflects MedGemma's medical pre-training — it already knows AIIMS/NEET PG
+content. Post-FT accuracy: **0.755** (unchanged). Root cause: only 0.1114 epochs covered
+in the 5h budget at batch=1 for a 27B model. ~2,033 effective steps is not enough to
+shift LoRA adapter weights from the base model distribution.
+
+### run-002 design options
+
+1. **Longer budget (24h):** covers ~0.5 epochs; may show improvement but ceiling is uncertain
+2. **Harder eval set:** switch to USMLE Step 2/3 or MedQA where MedGemma baseline is lower,
+   making fine-tuning signal visible against a lower starting point
+3. **Batch size increase:** if memory allows post-quantization, batch=2 would halve training time
+   per epoch (currently ~45h for 1 full epoch at batch=1)
